@@ -1,0 +1,13 @@
+name = "ACI318_25ReinforcementDetails"
+uuid = "9126e140-8d95-4fe7-a090-ba9aeabda2f5"
+authors = ["Eduardo Ruy"]
+version = "1.0.0-DEV"
+
+[compat]
+julia = "1.6.7"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
