@@ -4,6 +4,18 @@
 using Markdown
 using InteractiveUtils
 
+# This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
+macro bind(def, element)
+    #! format: off
+    quote
+        local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
+        local el = $(esc(element))
+        global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
+        el
+    end
+    #! format: on
+end
+
 # ╔═╡ b2da04e0-ff6f-11ef-3db4-8165a7ebfc2e
 using PlutoDevMacros
 
@@ -20,7 +32,14 @@ begin
 	using Handcalcs
 	using PrettyTables
 	using SummaryTables
+	using Symbolics
 end
+
+# ╔═╡ 4ee6a7f9-7b46-4315-91d9-045ae6cb6ae6
+module MyUnits
+	using Unitful
+	@unit kgf 	"kgf" 	KilogramForce 	1.0u"kg"*Unitful.ge 		false
+end # module MyUnits
 
 # ╔═╡ 80f18465-cc64-4335-bc7b-55df0af9b6c2
 @fromparent import *
@@ -28,206 +47,250 @@ end
 # ╔═╡ 027cc2b1-c160-46f7-857b-c16ce95ed18c
 names(ACI318_25ReinforcementDetails; all=true)
 
-# ╔═╡ e720a006-63cc-4467-aee7-eb4ac1a72d4b
-epoxy_list = [
-	"Epoxy-coated or zinc and epoxy dual-coated reinforcement with clear cover less than 3d_b or clear spacing less than 6d_b";
-	"Epoxy-coated or zinc and epoxy dual-coated reinforcement for all other conditions";
-	"Uncoated or zinc-coated (galvanized) reinforcement";
-]
+# ╔═╡ ae310438-a7cb-4de3-8778-fa189a100a1b
+md"""
+# Input data
+"""
 
-# ╔═╡ a7d143b7-c216-478e-ae83-e4ef6125ab08
-casting_position_list = [
-	"More than 12 in. of fresh concrete placed below horizontal reinforcement";
-	"Other";
-]
-
-# ╔═╡ 40bc31bb-19f0-41f0-845d-04ec41f3bb32
-function ℓ_d(
-	rebar_size, 
-	f_c_used, 
-	case,
-	reinforcement_grade, 
-	lightweight_concrete, 
-	epoxy_type, 
-	casting_position, 
-)
-	d_b = rebar_size * 1/8 * 1.0u"inch"
-
-	# Yielding strength of reinforcement
-	f_y = if reinforcement_grade == 40
-		40_000.0u"lbf / inch^2"
-	elseif reinforcement_grade == 60
-		60_000.0u"lbf / inch^2"
-	elseif reinforcement_grade == 80
-		80_000.0u"lbf / inch^2"
-	elseif reinforcement_grade == 100
-		100_000.0u"lbf / inch^2"
-	end # if
-
-	# Lightweight factor
-	λ = if lightweight_concrete == true
-		0.75
-	elseif lightweight_concrete == false
-		1.00
-	end # if
-
-	# Reinforcement grade factor
-	Ψ_g = if reinforcement_grade == 40 || reinforcement_grade == 60
-		1.0
-	elseif reinforcement_grade == 80
-		1.15
-	elseif reinforcement_grade == 100
-		1.3
-	end # if
-
-	# Epoxy factor
-	Ψ_e = if epoxy_type == epoxy_list[1]
-		1.5
-	elseif epoxy_type == epoxy_list[2]
-		1.2
-	elseif epoxy_type == epoxy_list[3]
-		1.0
-	end # if
-
-	# Rebar size factor
-	Ψ_s = if rebar_size ≥ 7
-		1.0
-	elseif rebar_size ≤ 6
-		0.8
-	end # if
-
-	# Casting position factor
-	Ψ_t = if casting_position == casting_position_list[1]
-		1.3
-	elseif casting_position == casting_position_list[2]
-		1.0
-	end # if
-
-	# Maximum concrete strength
-	f_c_max = (100.0u"lbf^0.5 / inch")^2
-	f_c = min(f_c_max, f_c_used)
-
-	ΨtΨe = min(1.7, Ψ_t * Ψ_e)
-	
-	# Develpment length
-	ℓ_d = max(
-		12.0u"inch",
-		
-		if case == 1
-			(3/40) * (f_y / (λ * √(f_c) * 1.0u"lbf^0.5 / inch")) * (ΨtΨe * Ψ_s * Ψ_g / (1.5)) * d_b # c_b + K_tr / d_b
-		elseif case == 2
-			(3/40) * (f_y / (λ * √(f_c) * 1.0u"lbf^0.5 / inch")) * (ΨtΨe * Ψ_s * Ψ_g / (1.0)) * d_b # c_b + K_tr / d_b
-		end # if
+# ╔═╡ 156eb9b3-b31c-4795-90d5-c00795489e87
+md"""
+Unit System:  
+$(
+	@bind unit_system Select(
+		[
+			"mks";
+			"SI";
+			"English";
+		], 
+		default="English"
 	)
-
-	return ℓ_d
-end # ℓ_d
-
-# ╔═╡ 797936ac-8696-4f40-9b39-1d380d698edd
-confining_reinforcement_list = [
-	"For No. 11 and smaller bars with A_th ≥ 0.4 A_hs or s ≥ 6 d_b";
-	"Other";
-]
-
-# ╔═╡ 3d194c62-1450-47a5-89e6-bc3ba42684c9
-location_list = [
-	"For No. 11 and smaller diameter hooked bars: (1) Terminating inside column core with side cover normal to plane of hook ≥ 2.5 in., or (2) With side cover normal to plane of hook ≥ 6d_b"; 
-	"Other";
-]
-
-# ╔═╡ 6d0fd8f1-d97d-4555-980a-7deec7aefbe4
-function ℓ_dh(
-	rebar_size, 
-	f_c_used, 
-	reinforcement_grade, 
-	lightweight_concrete, 
-	epoxy_type, 
-	confining_reinforcement, 
-	location,
 )
-# let#begin
-	d_b = rebar_size * 1/8 * 1.0u"inch"
-	
-# @handcalcs begin
+"""
 
-	# Yielding strength of reinforcement
-	f_y = if reinforcement_grade == 40
-		40_000.0u"lbf / inch^2"
-	elseif reinforcement_grade == 60
-		60_000.0u"lbf / inch^2"
-	elseif reinforcement_grade == 80
-		80_000.0u"lbf / inch^2"
-	elseif reinforcement_grade == 100
-		100_000.0u"lbf / inch^2"
-	end # if
+# ╔═╡ 49c6b23d-58f2-49f2-a6f4-ba08a6ad4330
+@bind reset_selected_to_defaults Button("Reset to default values")
 
-	# Lightweight factor
-	λ = if lightweight_concrete == true
-		0.75
-	elseif lightweight_concrete == false
-		1.00
-	end # if
-
-	# Epoxy factor
-	Ψ_e = if epoxy_type == epoxy_list[1] || epoxy_type == epoxy_list[2]
-		1.2
-	elseif epoxy_type == epoxy_list[3]
-		1.0
-	end # if
-
-	# Confining reinforcement
-	Ψ_r = if confining_reinforcement == confining_reinforcement_list[1]
-		1.0
-	elseif confining_reinforcement == confining_reinforcement_list[2]
-		1.6
-	end # if
-
-	# Location
-	Ψ_o = if location == location_list[1]
-		1.0
-	elseif location == location_list[2]
-		1.25
-	end # if
-
-	Ψ_c = if f_c_used < 6000.0u"psi"
-		f_c_used/15_000.0u"psi" + 0.6
-	elseif f_c_used ≥ 6000.0u"psi"
-		1.0
-	end # if
-	
-	# Maximum concrete strength
-	f_c_max = (100.0u"lbf^0.5 / inch")^2
-	f_c = min(f_c_max, f_c_used)
-
-	
-	# Develpment length
-	ℓ_dh = max(
-		6.0u"inch",
-		8 * d_b,
-		(1/55) * (f_y / (λ * √(f_c) * 1.0u"lbf^0.5 / inch")) * (Ψ_e * Ψ_r * Ψ_o * Ψ_c) * (d_b^(1.5) / 1.0u"inch^0.5")
+# ╔═╡ 3e90eab6-78fb-4b81-b9e7-0dbe633edb57
+reset_selected_to_defaults; md"""
+Lightweight concrete: $br 
+$(
+	@bind lightweight_concrete_selected Select(
+		[
+			false => "No", 
+			true => "Yes"
+		], 
+		default=false
 	)
+)
+"""
 
-	return ℓ_dh
-# end precision=2 len=:long
-end # ℓ_d
+# ╔═╡ b93b00c9-4369-4e43-b38b-2c22aa96e352
+reset_selected_to_defaults; md"""
+Reinforcement grade: $br
+$(
+	@bind reinforcement_grade_selected Select(
+		[
+			40 => "Grade 40", 
+			60 => "Grade 60", 
+			75 => "Grade 75", 
+			80 => "Grade 80", 
+			100 => "Grade 100", 
+			0 => "Custom", 
+		], 
+		default=60
+	)
+) ksi
+"""
 
-# ╔═╡ 112e77de-a9c4-467e-9278-c16b788127b7
-begin
-	f_c_used = 8000.0u"lbf/inch^2"
-	lightweight_concrete = false
-	reinforcement_grade = 60
-	epoxy_type = epoxy_list[3]
-	rebar_size = 7
-	casting_position = casting_position_list[1]
-	case = 1
-	confining_reinforcement = confining_reinforcement_list[1]
-	location = location_list[1]
-end
+# ╔═╡ a4cbd8fd-8c57-4bc0-a6d7-ba68714716dc
+md"""
+# Results
+"""
 
-# ╔═╡ 23bb5739-092a-408e-95bd-14cffa8e3cda
-preferred_length = u"inch"
-# preferred_length = u"cm"
-# preferred_length = u"mm"
+# ╔═╡ c83108fe-c227-46db-bb15-a33d81ba2407
+md"""
+# Calculations
+"""
+
+# ╔═╡ ed5643bf-9147-4af3-828e-8b976af35624
+if unit_system == "English"
+	preferred_length = u"inch"
+	preferred_force = u"lbf"
+	preferred_stress = u"psi"
+
+	f_c_min = 2_000.0#u"psi"
+	f_c_max = 20_000.0#u"psi"
+	f_c_default = 3_500.0#u"psi"
+	f_c_increments = 500.0#u"psi"
+
+	f_y_min = 20_000.0#u"psi"
+	f_y_max = 200_000.0#u"psi"
+	f_y_default = 60_000.0#u"psi"
+	f_y_increments = 10_000.0#u"psi"
+
+elseif unit_system == "SI"
+	preferred_length = u"mm"
+	preferred_force = u"kN"
+	preferred_stress = u"MPa"
+
+	f_c_min = 15.0#u"MPa"
+	f_c_max = 200.0#u"MPa"
+	f_c_default = 25.0#u"MPa"
+	f_c_increments = 5.0#u"MPa"
+
+	f_y_min = 140.0#u"MPa"
+	f_y_max = 1500.0#u"MPa"
+	f_y_default = 420.0#u"MPa"
+	f_y_increments = 40.0#u"MPa"
+	
+elseif unit_system == "mks"
+	preferred_length = u"cm"
+	preferred_force = u"kgf"
+	preferred_stress = u"kgf/cm^2"
+
+	f_c_min = 150.0#u"kgf/cm^2"
+	f_c_max = 2_000.0#u"kgf/cm^2"
+	f_c_default = 250.0#u"kgf/cm^2"
+	f_c_increments = 50.0#u"kgf/cm^2"
+
+	f_y_min = 1500.0#u"kgf/cm^2"
+	f_y_max = 15000.0#u"kgf/cm^2"
+	f_y_default = 4200.0#u"kgf/cm^2"
+	f_y_increments = 500.0#u"kgf/cm^2"
+end; "Unit system: $unit_system" # if
+
+# ╔═╡ c433d46d-71a6-4e4e-b3e8-8bf3ed17630d
+reset_selected_to_defaults; md"""
+Concrete compressive strength: $br 
+$(
+	@bind f_c_selected NumberField(
+		f_c_min:f_c_increments:f_c_max, 
+		default=f_c_default
+	)
+) 
+ $(preferred_stress) 
+"""
+
+# ╔═╡ 9cc812a2-0765-48ff-91df-e1aebace845e
+reinforcement_grade_selected == 0 ? md"""
+Custom reinforcement grade: 
+$(
+	@bind f_y_selected NumberField(
+		f_y_min:f_y_increments:f_y_max, 
+		default=f_y_default
+	)
+) 
+$(preferred_stress)
+
+""" : md""
+
+# ╔═╡ df98734f-adda-44e1-b9d9-7656c1a0dc62
+f_y_used = if reinforcement_grade_selected == 40
+	40_000.0u"psi"
+elseif reinforcement_grade_selected == 60
+	60_000.0u"psi"
+elseif reinforcement_grade_selected == 75
+	75_000.0u"psi"
+elseif reinforcement_grade_selected == 80
+	80_000.0u"psi"
+elseif reinforcement_grade_selected == 100
+	100_000.0u"psi"
+elseif reinforcement_grade_selected == 0
+	f_y_selected * preferred_stress
+end |> preferred_stress # if 
+
+# ╔═╡ 5f3ef1ab-3280-41fb-a6b4-53212a664630
+md"""
+### 25.4.2 Development of deformed bars and deformed wires in tension
+"""
+
+# ╔═╡ 87c0ceda-75d3-492b-a071-d2813f892c13
+md"""
+$br
+$br
+$br
+"""
+
+# ╔═╡ 28d3fe04-6513-4647-8eff-a7b6bb3833bf
+md"""
+### 25.4.3 Development of standard hooks in tension
+"""
+
+# ╔═╡ 8e38639f-5913-49d7-9f86-7b2e9abd49b8
+md"""
+$br
+$br
+$br
+"""
+
+# ╔═╡ 96414313-cc3d-4e79-b067-534b9ef440f6
+md"""
+### 25.4.4 Development of headed deformed bars in tension
+"""
+
+# ╔═╡ f8e3eb62-ac3a-4645-b341-a9e63c3d8abd
+md"""
+_missing_
+"""
+
+# ╔═╡ 0ff27e34-bc15-49ef-a5fe-a71fffd4acb2
+md"""
+$br
+$br
+$br
+"""
+
+# ╔═╡ baecef75-a95f-479b-a45e-fae2a7c7df09
+md"""
+### 25.4.9 Development of deformed bars and deformed wires in compression
+"""
+
+# ╔═╡ ff7d932b-44c4-48d0-a06c-8f50ac0718fe
+md"""
+$br
+$br
+$br
+"""
+
+# ╔═╡ 88cd1122-e048-4606-a1aa-01abf53e3166
+md"""
+### 25.5.2 Lap splice lengths of deformed bars and deformed wires in tension
+"""
+
+# ╔═╡ a9f6ddf2-6114-4ede-8696-35a39adda062
+function ℓ_st(ℓ_d, class)
+	ℓ_st = if class == "A"
+		max(ℓ_d, 12.0u"inch")
+	elseif class == "B"
+		max(1.3 * ℓ_d, 12.0u"inch")
+	end # if
+
+	return ℓ_st
+end # ℓ_st
+
+# ╔═╡ c2a51979-4a0c-45dd-a9d7-2af90e80f012
+md"""
+$br
+$br
+$br
+"""
+
+# ╔═╡ 9285bc03-1746-4c5f-8411-d859273fbc06
+md"""
+### 25.5.5 Lap splice lengths of deformed bars in compression
+"""
+
+# ╔═╡ 30d2fd1a-8025-4e4e-aee4-d712252a2cec
+md"""
+$br
+$br
+$br
+"""
+
+# ╔═╡ ba66fcf3-34a0-4d6e-9421-852ac6eb8a79
+md"""
+## Auxiliar lists
+"""
 
 # ╔═╡ 00d22203-2ccd-408a-b791-c5a12abb53bf
 rebar_list = [
@@ -245,45 +308,6 @@ rebar_list = [
 	18;
 ]
 
-# ╔═╡ 7c54ec65-8575-4a42-9188-d83966d94523
-begin
-	ℓ_d_table_top_inch = ℓ_d.(
-		rebar_list, 
-		f_c_used, 
-		case,
-		reinforcement_grade, 
-		lightweight_concrete, 
-		epoxy_type, 
-		casting_position_list[1], 
-	)
-	
-	ℓ_d_table_bot_inch = ℓ_d.(
-		rebar_list, 
-		f_c_used, 
-		case,
-		reinforcement_grade, 
-		lightweight_concrete, 
-		epoxy_type, 
-		casting_position_list[2], 
-	)
-	ℓ_d_table_hook_inch = ℓ_dh.(
-		rebar_list, 
-		f_c_used, 
-		reinforcement_grade, 
-		lightweight_concrete, 
-		epoxy_type, 
-		confining_reinforcement, 
-		location,
-	)
-end
-
-# ╔═╡ 78784a0f-343f-468d-a319-67dd0739acf7
-begin
-	ℓ_d_table_top = ℓ_d_table_top_inch#ceil.(preferred_length, ℓ_d_table_top_inch)
-	ℓ_d_table_bot = ceil.(preferred_length, ℓ_d_table_bot_inch)
-	ℓ_d_table_hook = ceil.(preferred_length, ℓ_d_table_hook_inch)
-end
-
 # ╔═╡ bc23969d-aaf6-4f06-ad48-0f628c86cb6f
 rebar_list_SI = [
 	6;
@@ -300,57 +324,109 @@ rebar_list_SI = [
 	57;
 ]
 
-# ╔═╡ 8b3eeb4a-8f59-4ef8-ae83-08fc36c6331f
-begin
-	header_1 = ["", "", "Tension", "Tension", "Tension"]
-	header_2 = ["Bar Size", "Bar Size", "Development", "Development", "Development"]
-	header_3 = ["", "", "Top", "Bot", "with Hook"]
-	header_4 = ["1/8 in.", u"mm", preferred_length, preferred_length, preferred_length]
-	
-	data = hcat(
-		"#" .* string.(rebar_list), 
-		"#" .* string.(rebar_list_SI),  
-		ℓ_d_table_top  ./ preferred_length, 
-		ℓ_d_table_bot  ./ preferred_length,
-		ℓ_d_table_hook ./ preferred_length,
-	)
-	
-	labels = ["" for i=1:size(data)[1]+4]
-		
-	body = [
-	    Cell.(
-			header_1, 
-			bold = true, 
-			# italic = true,
-			# underline = true,
-			# halign = :center, # :left :center :right
-			# valign = :center, # :top :center :bottom
-			# indent_pt = 50,
-			# border_bottom = false,
-			merge = true, # All adjacent cells that are == equal to each other and have merge = true will be rendered as one merged cell. 
-		)';
-	    Cell.(header_2, bold = true, merge = true, border_bottom = false)';
-	    Cell.(header_3)';
-	    Cell.(header_4, italic = true)';
-	    Cell.(data)
-	]
+# ╔═╡ e720a006-63cc-4467-aee7-eb4ac1a72d4b
+epoxy_list = [
+	"Epoxy-coated or zinc and epoxy dual-coated reinforcement with clear cover less than 3d_b or clear spacing less than 6d_b";
+	"Epoxy-coated or zinc and epoxy dual-coated reinforcement for all other conditions";
+	"Uncoated or zinc-coated (galvanized) reinforcement";
+]
 
-	Table(
-		header = 4,
-		# footer = 16,
-		# footnotes = ["Footnote 1:", "Footnote 2:"],
-		# linebreak_footnotes = false,
-		rowgaps = [7 => 5.0, 10 => 5.0, 13 => 5.0],
-		colgaps = [3 => 10.0, ],
-		hcat(
-		    Cell.(labels, italic = true, halign = :right),
-		    body
-		),
-	    round_digits = 0,
-    	round_mode = :digits,
-		trailing_zeros = true,
+# ╔═╡ 8d089fd6-82e9-4e23-ae4c-8eeb832734b1
+reset_selected_to_defaults; md"""
+Epoxy type: $br
+$(
+	@bind epoxy_type_selected Select(
+		epoxy_list, 
+		default=epoxy_list[3]
 	)
-end
+)
+"""
+
+# ╔═╡ a7d143b7-c216-478e-ae83-e4ef6125ab08
+casting_position_list = [
+	"More than 12 in. of fresh concrete placed below horizontal reinforcement";
+	"Other";
+]
+
+# ╔═╡ 3d194c62-1450-47a5-89e6-bc3ba42684c9
+location_list = [
+	"For No. 11 and smaller diameter hooked bars: 
+	(1) Terminating inside column core with side cover normal to plane of hook ≥ 2.5 in., or 
+	(2) With side cover normal to plane of hook ≥ 6d_b"; 
+	"Other";
+]
+
+# ╔═╡ b847e1b1-008e-4caa-b8ae-7cb37b5e73a3
+reset_selected_to_defaults; md"""
+Location of reinforcement: $br 
+$(
+	@bind location_selected Select(
+		location_list, 
+		default=location_list[1]
+	)
+)
+"""
+
+# ╔═╡ 797936ac-8696-4f40-9b39-1d380d698edd
+confining_reinforcement_tension_list = [
+	"For No. 11 and smaller bars with A_{th} ≥ 0.4 A_{hs} or s ≥ 6 d_b 
+	A_{th}: total-cross-sectional area of ties or stirrups confining hooked bars
+	A{hs}: total cross-sectional area of hooked or headed bars being developed at a critical section";
+	"Other";
+]
+
+# ╔═╡ 4f22d62b-baef-4732-8dd7-5648bad8f5e5
+reset_selected_to_defaults; md"""
+Confining reinforcement for tension: $br
+$(
+	@bind confining_reinforcement_tension_selected Select(
+		confining_reinforcement_tension_list, 
+		default=confining_reinforcement_tension_list[1]
+	)
+)
+"""
+
+# ╔═╡ fdda1c3c-3721-4f9e-b032-5ecd4baf9928
+confining_case_list = [
+	"Clear spacing of bars or wires being developed or lap spliced not less than d_b, clear cover at least d_b, and stirrups or ties throughout l_d not less than the Code minimum
+	or 
+	Clear spaing of bars or wires being developed or lap spliced at least 2d_b and clear cover at least d_b"; 
+	"Other cases";
+]
+
+# ╔═╡ f547952e-feed-45b1-ad69-25d5b5d289f4
+reset_selected_to_defaults; md"""
+Confining case: $br
+$(
+	@bind confining_case_selected Select(
+		confining_case_list, 
+		default=confining_case_list[1]
+	)
+)
+"""
+
+# ╔═╡ 38110d01-a1cf-4142-bad6-b1f54c2707d4
+confining_reinforcement_compression_list = [
+	"Reinforcement enclosed within (1), (2), (3), or (4):
+		(1) a spiral
+		(2) a circular continuously wound tie with d_b ≥ 1/4 in. and pitch 4 in.
+		(3) No. 4 bar or D20 wire ties in accordance with 25.7.2 spaced ≤ 4 in. on center
+		(4) hoops in accordance with 25.7.4 spaced ≤ 4 in. on center
+	";
+	"Other";
+]
+
+# ╔═╡ fc68a3d0-656d-4efc-9239-11636d2f6500
+reset_selected_to_defaults; md"""
+Confining reinforcement for compression: $br
+$(
+	@bind confining_reinforcement_compression_selected Select(
+		confining_reinforcement_compression_list, 
+		default=confining_reinforcement_compression_list[2]
+	)
+)
+
+"""
 
 # ╔═╡ b6bb7fdd-aecd-41a0-934a-2981155355d5
 md"""
@@ -362,6 +438,18 @@ md"""
 ##### Packages 
 Packages loaded only to the notebook
 """
+
+# ╔═╡ 1934ea7f-da27-457d-90d9-539643a4f410
+html"<br><br><br>"
+
+# ╔═╡ 7ad9475c-c627-46c6-9a3c-dee1948813df
+md"""
+##### Units 
+Adding units to notebook
+"""
+
+# ╔═╡ 94a1af2f-8d24-45b0-8698-953d274b7dee
+Unitful.register(MyUnits)
 
 # ╔═╡ 6221e2b7-bd96-4319-b484-71841d655e40
 html"<br><br><br>"
@@ -430,24 +518,594 @@ function remove_arguments(s::LaTeXString)
     return LaTeXString(replace(s, r=>"", count=1))
 end
 
-# ╔═╡ 193e4d46-2155-4c9f-beb0-3b4edd10cc80
+# ╔═╡ 9ee27fcb-f472-45da-95f1-7defe75b6b50
 Markdown.parse("""
-#### 25.4.2.3
-
-
+**Size** 
 
 $(
 remove_arguments(
-	 @latexrun ℓ_d3() = 1
+	@latexrun Ψs_(rebar_size) = if rebar_size ≥ 7
+		1.0
+	elseif rebar_size ≤ 6
+		0.8
+	end # if
 )
 )
-
-##### Arguments 
-- ``  ``: .
-
-##### Reference
-- ACI 318-19: 25.4.2.3.
 """)
+
+# ╔═╡ 5df76aa2-aacc-4ffa-8a72-4bba26e690a4
+Markdown.parse("""
+**Casting position** 
+
+$(
+remove_arguments(
+	@latexrun Ψt_(casting_position) = if casting_position == $(casting_position_list[1])
+		1.3
+	elseif casting_position == $(casting_position_list[2])
+		1.0
+	end # if
+)
+)
+""")
+
+# ╔═╡ ccb73a9f-1bc1-4293-ac4f-161106411c94
+Markdown.parse("""
+**Epoxy** 
+
+$(
+remove_arguments(
+	# Epoxy factor
+	@latexrun Ψe_(epoxy_type) = if epoxy_type == $(epoxy_list[1])
+		1.5
+	elseif epoxy_type == $(epoxy_list[2])
+		1.2
+	elseif epoxy_type == $(epoxy_list[3])
+		1.0
+	end # if
+)
+)
+""")
+
+# ╔═╡ 1f16805b-edf3-47f1-8bdb-b10fd6344131
+Markdown.parse("""
+##### 25.4.2.5 Modification factors for development of hooked bars in tension.
+
+**Confining reinforcement** 
+
+$(
+remove_arguments(
+	# Confining reinforcement
+	@latexrun Ψr_(confining_reinforcement) = if confining_reinforcement == $(confining_reinforcement_tension_list[1])
+		1.0
+	elseif confining_reinforcement == $(confining_reinforcement_tension_list[2])
+		1.6
+	end # if
+)
+)
+""")
+
+# ╔═╡ 732337cf-141d-4694-a839-b6dbf33149ba
+Markdown.parse("""
+**Location** 
+
+$(
+remove_arguments(
+	# Location
+	@latexrun Ψo_(location) = if location == $(location_list[1])
+		1.0
+	elseif location == $(location_list[2])
+		1.25
+	end # if
+)
+)
+""")
+
+# ╔═╡ 7ad6e59b-cb77-4c90-8f9c-c43f227095f5
+"""
+Removes the function 'wrong' printing of units in latex equation.
+Example: `mathrm{@u}_{str}left( psi right)` to ` psi `
+"""
+function remove_unitstring(s::LaTeXString)
+    r = r"\\cdot \\mathrm{@u}_{str}\\left\( .*? \\right\)"
+    unit = r"(?<= \\mathrm{@u}_{str}\\left\( )(.*?)(?= \\right\))"
+	
+	matched_units = collect(eachmatch(unit,s))
+	for i=eachindex(matched_units)
+		units = matched_units[i].match
+		s = LaTeXString(replace(s, r=>units, count=1))
+	end
+	
+	return s
+end
+
+# ╔═╡ 6c4aec09-d71f-4328-bb32-fc5408809086
+remove_unitstring(remove_arguments(
+	@latexrun db_(rebar_size) = rebar_size * (1/8) * 1.0u"inch"
+))
+
+# ╔═╡ 20a657f5-2cdc-46b6-8919-389f7ee812b0
+function ℓ_sc(f_y, f_c, rebar_size, ℓ_st=1000.0u"inch")
+	d_b = db_(rebar_size)
+	
+	ℓ_sc = if f_y ≤ 60_000.0u"psi"
+		max(
+			12.0u"inch",
+			0.0005u"1.0/psi" * f_y * d_b,
+		)
+	
+	elseif 60_000.0u"psi" ≤ f_y ≤ 80_000.0u"psi"
+		max(
+			12.0u"inch",
+			(0.0009u"1.0/psi" * f_y - 24.0) * d_b,
+		)
+		
+	elseif f_y ≥ 80_000.0u"psi"
+		max(
+			(0.0009u"1.0/psi" * f_y - 24.0) * d_b,
+			ℓ_st,
+		)
+		
+	end # if
+
+	ℓ_sc = f_c < 3_000u"psi" ? (1.0 + 1/3) * ℓ_sc : ℓ_sc
+	
+	return ℓ_sc
+end # ℓ_sc
+
+# ╔═╡ fd5d62c7-491e-4a3e-ad50-f31e5e1f81fd
+remove_unitstring(remove_arguments(
+	@latexrun λ_(lightweight_concrete) = if lightweight_concrete == true
+		0.75
+	elseif lightweight_concrete == false
+		1.00
+	end # if
+))
+
+# ╔═╡ 9345cc82-e951-4eea-91bc-3cf6bd503327
+Markdown.parse("""
+##### 25.4.9.1 Development length `` ℓ_{dc} `` for deformed bars and deformed wires in compression shall be: 
+
+$(
+remove_arguments(
+@latexrun function ℓ_dc(
+	rebar_size, 
+	f_c, 
+	f_y, 
+	lightweight_concrete, 
+	confining_reinforcement, 
+)
+	
+	d_b = db_(rebar_size)
+
+	# Lightweight factor
+	λ = λ_(lightweight_concrete)
+
+	# Confining reinforcement
+	Ψ_r = if confining_reinforcement == confining_reinforcement_compression_list[1]
+		0.75
+	elseif confining_reinforcement == confining_reinforcement_compression_list[2]
+		1.0
+	end # if
+
+	# Develpment length
+	ℓ_dc = max(
+		8.0u"inch",
+		0.0003u"inch^2 / lbf" * f_y * Ψ_r * d_b,
+		(1/50) * (f_y * Ψ_r / (λ * √(f_c) * 1.0u"lbf^0.5 / inch")) * d_b
+	) |> u"inch"
+
+	return ℓ_dc
+end # ℓ_dc
+)
+)
+
+
+""")
+
+# ╔═╡ 48f8a053-29bb-422f-b203-c51b6ba1eab9
+Markdown.parse("""
+##### 25.4.1.4. The values of `` \\sqrt{f'_c} `` used to calculate development length shall not exceed `` $(100.0u"psi") ``. 
+
+$(
+remove_unitstring(
+# remove_arguments(
+	# @latexrun f_cmax = (100.0u"lbf^0.5 / inch")^2
+	@latexdefine f_cmax = 100.0^2 * u"psi"
+# )
+)
+)
+""")
+
+# ╔═╡ 8ef04446-1dbd-480d-b49a-a79ba9e8f015
+f_c_used = min(f_cmax, f_c_selected * preferred_stress) |> preferred_stress 
+
+# ╔═╡ 1c9c182a-0627-4d75-802f-2677cc26fbdb
+Markdown.parse("""
+##### 25.4.2.5 Modification factors for development of deformed bars and deformed wires in tension.
+
+**Reinforcement grade** 
+
+$(
+remove_unitstring(remove_arguments(
+	@latexrun Ψg_(f_y) = if f_y ≤ 60_000.0u"psi"
+		1.0
+	elseif 60_000u"psi" < f_y ≤ 80_000.0u"psi"
+		1.15
+	elseif f_y > 80_000.0u"psi"
+		1.3
+	end # if
+))
+)
+""")
+
+# ╔═╡ 66d2c12a-2885-4c03-8da5-3d7ad6dee360
+Markdown.parse("""
+##### 25.4.2.4 For deformed bars or deformed wires, `` ℓ_d `` shall be calculated by: 
+
+$(
+remove_arguments(
+@latexrun function ℓ_d(
+	rebar_size, 
+	f_c, 
+	confining_case,
+	f_y, 
+	lightweight_concrete, 
+	epoxy_type, 
+	casting_position, 
+)
+	d_b = db_(rebar_size)
+
+	# Lightweight factor
+	λ = λ_(lightweight_concrete)
+
+	# Reinforcement grade factor
+	Ψ_g = Ψg_(f_y)
+
+	# Epoxy factor
+	Ψ_e = Ψe_(epoxy_type)
+
+	# Rebar size factor
+	Ψ_s = Ψs_(rebar_size)
+
+	# Casting position factor
+	Ψ_t = Ψt_(casting_position)
+
+	ΨtΨe = min(1.7, Ψ_t * Ψ_e)
+	
+	# Develpment length
+	ℓ_d = max(
+		12.0u"inch",
+		
+		if confining_case == confining_case_list[1]
+			(3/40) * (f_y / (λ * √(f_c) * 1.0u"lbf^0.5 / inch")) * (ΨtΨe * Ψ_s * Ψ_g / (1.5)) * d_b # 1.5 = c_b + K_tr / d_b
+		elseif confining_case == confining_case_list[2]
+			(3/40) * (f_y / (λ * √(f_c) * 1.0u"lbf^0.5 / inch")) * (ΨtΨe * Ψ_s * Ψ_g / (1.0)) * d_b # 1.0 = c_b + K_tr / d_b
+		end # if
+	)
+
+	return ℓ_d
+end # ℓ_d
+)
+)
+
+
+""")
+
+# ╔═╡ 47f6d488-5c99-4635-b3de-0db1c0bd25f8
+Markdown.parse("""
+**Location** 
+
+$(
+remove_unitstring(remove_arguments(
+	@latexrun Ψc_(f_c) = if f_c < 6000.0u"psi"
+		f_c/15_000.0u"psi" + 0.6
+	elseif f_c ≥ 6000.0u"psi"
+		1.0
+	end # if
+))
+)
+""")
+
+# ╔═╡ 5f702941-0371-4148-827b-8922999a9ee3
+Markdown.parse("""
+##### 25.4.2.4 Development length `` ℓ_{dh} `` for deformed bars in tension terminating in a standard hook shall be: 
+
+$(
+remove_arguments(
+@latexrun function ℓ_dh(
+	rebar_size, 
+	f_c, 
+	f_y, 
+	lightweight_concrete, 
+	epoxy_type, 
+	confining_reinforcement, 
+	location,
+)
+	d_b = db_(rebar_size)
+
+	# Lightweight factor
+	λ = λ_(lightweight_concrete)
+
+	# Epoxy factor
+	Ψ_e = if epoxy_type == epoxy_list[1] || epoxy_type == epoxy_list[2]
+		1.2
+	elseif epoxy_type == epoxy_list[3]
+		1.0
+	end # if
+
+	# Confining reinforcement
+	Ψ_r = Ψr_(confining_reinforcement)
+
+	# Location
+	Ψ_o = Ψo_(location)
+
+	# Concrete strength factor
+	Ψ_c = Ψc_(f_c)
+
+	# Develpment length
+	ℓ_dh = max(
+		6.0u"inch",
+		8 * d_b,
+		(1/55) * (f_y / (λ * √(f_c) * 1.0u"lbf^0.5 / inch")) * (Ψ_e * Ψ_r * Ψ_o * Ψ_c) * (d_b^(1.5) / 1.0u"inch^0.5")
+	)
+
+	return ℓ_dh
+end # ℓ_dh
+)
+)
+
+
+""")
+
+# ╔═╡ 78784a0f-343f-468d-a319-67dd0739acf7
+begin
+	# Calculate the development length in tension for top, bot and hook
+	ℓ_d_table_top_inch = ℓ_d.(
+		rebar_list, 
+		f_c_used, 
+		confining_case_selected,
+		f_y_used, 
+		lightweight_concrete_selected, 
+		epoxy_type_selected, 
+		casting_position_list[1], 
+	)
+	
+	ℓ_d_table_bot_inch = ℓ_d.(
+		rebar_list, 
+		f_c_used, 
+		confining_case_selected,
+		f_y_used, 
+		lightweight_concrete_selected, 
+		epoxy_type_selected, 
+		casting_position_list[2], 
+	)
+	ℓ_d_table_hook_inch = ℓ_dh.(
+		rebar_list, 
+		f_c_used, 
+		f_y_used, 
+		lightweight_concrete_selected, 
+		epoxy_type_selected, 
+		confining_reinforcement_tension_selected, 
+		location_selected,
+	)
+
+	ℓ_dc_table_inch = ℓ_dc.(
+		rebar_list, 
+		f_c_used, 
+		f_y_used, 
+		lightweight_concrete_selected, 
+		confining_reinforcement_compression_selected, 
+	)
+	
+	# Splices in TENSION
+	ℓ_st_table_top_classA_inch = ℓ_st.(ℓ_d_table_top_inch, "A")
+	ℓ_st_table_bot_classA_inch = ℓ_st.(ℓ_d_table_bot_inch, "A")
+	ℓ_st_table_top_classB_inch = ℓ_st.(ℓ_d_table_top_inch, "B")
+	ℓ_st_table_bot_classB_inch = ℓ_st.(ℓ_d_table_bot_inch, "B")
+
+	# eliminating the #14 and #18 splices as it is not permitted
+	ℓ_st_table_top_classA_inch[end-1:end] .= 0.0u"inch"
+	ℓ_st_table_bot_classA_inch[end-1:end] .= 0.0u"inch"
+	ℓ_st_table_top_classB_inch[end-1:end] .= 0.0u"inch"
+	ℓ_st_table_bot_classB_inch[end-1:end] .= 0.0u"inch"
+
+	
+	# # Splices in COMPRESSION
+	ℓ_sc_table_inch = ℓ_sc.(f_y_used, f_c_used, rebar_list)
+	
+	ℓ_sc_table_top_classA_inch = ℓ_sc.(f_y_used, f_c_used, rebar_list, ℓ_st_table_top_classA_inch)
+	ℓ_sc_table_bot_classA_inch = ℓ_sc.(f_y_used, f_c_used, rebar_list, ℓ_st_table_bot_classA_inch)
+	ℓ_sc_table_top_classB_inch = ℓ_sc.(f_y_used, f_c_used, rebar_list, ℓ_st_table_top_classB_inch)
+	ℓ_sc_table_bot_classB_inch = ℓ_sc.(f_y_used, f_c_used, rebar_list, ℓ_st_table_bot_classB_inch)
+
+	# # eliminating the #14 and #18 splices as it is not permitted
+	ℓ_sc_table_inch[end-1:end] .= 0.0u"inch"
+	
+	ℓ_sc_table_top_classA_inch[end-1:end] .= 0.0u"inch"
+	ℓ_sc_table_bot_classA_inch[end-1:end] .= 0.0u"inch"
+	ℓ_sc_table_top_classB_inch[end-1:end] .= 0.0u"inch"
+	ℓ_sc_table_bot_classB_inch[end-1:end] .= 0.0u"inch"
+
+
+	
+	# Round up the length and chaning to preferred Units system
+	ℓ_d_table_top = ceil.(preferred_length, ℓ_d_table_top_inch)
+	ℓ_d_table_bot = ceil.(preferred_length, ℓ_d_table_bot_inch)
+	ℓ_d_table_hook = ceil.(preferred_length, ℓ_d_table_hook_inch)
+	ℓ_dc_table = ceil.(preferred_length, ℓ_dc_table_inch)
+
+	ℓ_st_table_top_classA = ceil.(preferred_length, ℓ_st_table_top_classA_inch)
+	ℓ_st_table_bot_classA = ceil.(preferred_length, ℓ_st_table_bot_classA_inch)
+	ℓ_st_table_top_classB = ceil.(preferred_length, ℓ_st_table_top_classB_inch)
+	ℓ_st_table_bot_classB = ceil.(preferred_length, ℓ_st_table_bot_classB_inch)
+
+	ℓ_sc_table = ceil.(preferred_length, ℓ_sc_table_inch)
+	
+	ℓ_sc_table_top_classA = ceil.(preferred_length, ℓ_sc_table_top_classA_inch)
+	ℓ_sc_table_bot_classA = ceil.(preferred_length, ℓ_sc_table_bot_classA_inch)
+	ℓ_sc_table_top_classB = ceil.(preferred_length, ℓ_sc_table_top_classB_inch)
+	ℓ_sc_table_bot_classB = ceil.(preferred_length, ℓ_sc_table_bot_classB_inch)
+end; "Calcs"
+
+# ╔═╡ c6c9ea3e-1088-4fd7-9225-2ccb6988a45b
+let
+	# Print in a table all development lengths
+
+	# Bar size
+	bar_size_header = [
+		"Bar Size" "Bar Size";
+		"Bar Size" "Bar Size";
+		"Bar Size" "Bar Size";
+		"Bar Size" "Bar Size";
+	]
+	bar_size_units = [
+		"1/8in" "mm";
+	]
+	bar_size = hcat(
+		"#" .* string.(rebar_list), 
+		"#" .* string.(rebar_list_SI), 
+	)
+
+	# Development length in TENSION
+	development_length_tension_header = [
+		"Tension" 		"Tension" 		"Tension";
+		"Development" 	"Development" 	"Development";
+		"Development" 	"Development" 	"Development";
+		"Top, ℓ_d" 		"Bot, ℓ_d" 		"Hook, ℓ_dh";
+	]
+	development_length_tension_units = [
+		preferred_length preferred_length preferred_length;
+	]
+	development_length_tension = hcat(	
+		ℓ_d_table_top  ./ preferred_length, 
+		ℓ_d_table_bot  ./ preferred_length,
+		ℓ_d_table_hook ./ preferred_length,
+
+	)
+
+	# Splice in TENSION
+	splice_tension_header = [
+		"Tension" 	"Tension" 	"Tension" 	"Tension";
+		"Splice, ℓ_st" 	"Splice, ℓ_st" 	"Splice, ℓ_st" 	"Splice, ℓ_st";
+		"Class A" 	"Class A" 	"Class B" 	"Class B";
+		"Top" 		"Bot" 		"Top" 		"Bot";
+	]
+	splice_tension_units = [
+		preferred_length preferred_length preferred_length preferred_length;
+	]
+	splice_tension = hcat(
+		ℓ_st_table_top_classA  ./ preferred_length, 
+		ℓ_st_table_bot_classA  ./ preferred_length,
+		ℓ_st_table_top_classB  ./ preferred_length, 
+		ℓ_st_table_bot_classB  ./ preferred_length,
+	)
+
+	# Development length in COMPRESSION
+	development_length_compression_header = [
+		"Compression";
+		"Development, ℓ_dc";
+		"Development, ℓ_dc";
+		"Development, ℓ_dc";
+	]
+	development_length_compression_units = [
+		preferred_length
+	]
+	development_length_compression = hcat(
+		ℓ_dc_table ./ preferred_length,
+	)
+
+	# Splice in COMPRESSION
+	if f_y_used ≤ 80_000.0u"psi"
+		splice_compression_header = [
+			"Compression";
+			"Splice, ℓ_sc";
+			"Splice, ℓ_sc";
+			"Splice, ℓ_sc";
+		]
+		splice_compression_units = [
+			preferred_length;
+		]
+		splice_compression = hcat(
+			ℓ_sc_table  ./ preferred_length, 
+		)
+		
+	else
+		splice_compression_header = [
+			"Compression" 	"Compression" 	"Compression" 	"Compression";
+			"Splice, ℓ_sc" 		"Splice, ℓ_sc" 		"Splice, ℓ_sc" 		"Splice, ℓ_sc";
+			"Class A" 		"Class A" 		"Class B" 		"Class B";
+			"Top" 			"Bot" 			"Top" 			"Bot";
+		]
+		splice_compression_units = [
+			preferred_length preferred_length preferred_length preferred_length;
+		]
+		splice_compression = hcat(
+			ℓ_sc_table_top_classA  ./ preferred_length, 
+			ℓ_sc_table_bot_classA  ./ preferred_length,
+			ℓ_sc_table_top_classB  ./ preferred_length, 
+			ℓ_sc_table_bot_classB  ./ preferred_length,
+		)
+	end # if
+
+
+
+	# Converting to CELLS
+	bar_size_cells = [
+		Cell.(bar_size_header, bold = true, merge = true, valign = :center);
+		Cell.(bar_size_units, italic = true, merge = false, valign = :center);
+		Cell.(bar_size, bold = true, merge = false, valign = :center);
+	]
+	development_length_tension_cells = [
+		Cell.(development_length_tension_header, bold = true, merge = true, valign = :center);
+		Cell.(development_length_tension_units, italic = true, merge = false, valign = :center);
+		Cell.(development_length_tension, bold = true, merge = false, valign = :center);
+	]
+
+	splice_tension_cells = [
+		Cell.(splice_tension_header, bold = true, merge = true, valign = :center);
+		Cell.(splice_tension_units, italic = true, merge = false, valign = :center);
+		Cell.(splice_tension, bold = true, merge = false, valign = :center);
+	]
+
+	development_length_compression_cells = [
+		Cell.(development_length_compression_header, bold = true, merge = true, valign = :center);
+		Cell.(development_length_compression_units, italic = true, merge = false, valign = :center);
+		Cell.(development_length_compression, bold = true, merge = false, valign = :center);
+	]
+
+	splice_compression_cells = [
+		Cell.(splice_compression_header, bold = true, merge = true, valign = :center);
+		Cell.(splice_compression_units, italic = true, merge = false, valign = :center);
+		Cell.(splice_compression, bold = true, merge = false, valign = :center);
+	]
+
+	Table(
+		header = 5,
+		# footer = 16,
+		# footnotes = ["Footnote 1:", "Footnote 2:"],
+		# linebreak_footnotes = false,
+		rowgaps = [8 => 5.0, 11 => 5.0, 14 => 5.0],
+		colgaps = [2 => 10.0, #=3 => 10.0, 4 => 0.0=#],
+		hcat(
+		    bar_size_cells,
+			development_length_tension_cells,
+			splice_tension_cells,
+			development_length_compression_cells,
+			splice_compression_cells
+		),
+	    round_digits = 3,
+    	round_mode = :sigdigits, # :auto :digits :sigdigits
+		trailing_zeros = false,
+	)
+end
+
+# ╔═╡ 29ac282c-0429-47a0-9da2-b7a0449b4e4a
+# Left align Latexify functions
+left_align_in_pluto()
+
+# ╔═╡ f1d07d6d-a126-4f41-a246-758e0861aed3
+# in JS console paste this to allow style inside """ """
+# window.PLUTO_TOGGLE_CM_MIXED_PARSER()
 
 # ╔═╡ a9a8cd53-ed30-4d21-af3c-dfb6e2f46440
 # let
@@ -485,9 +1143,6 @@ let
 	))
 end
 
-# ╔═╡ dfba23f5-64e0-4905-8646-8b6c51aecc34
-
-
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
@@ -501,6 +1156,8 @@ PlutoPlotly = "8e989ff0-3d88-8e9f-f020-2b208a939ff0"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
 PrettyTables = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
 SummaryTables = "6ce4ecf0-73a7-4ce3-9fb4-80ebfe887b60"
+Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 UnitfulLatexify = "45397f5d-5981-4c77-b2b3-fc36d6e9b728"
 
 [compat]
@@ -514,6 +1171,8 @@ PlutoPlotly = "~0.6.2"
 PlutoUI = "~0.7.61"
 PrettyTables = "~2.4.0"
 SummaryTables = "~3.3.0"
+Symbolics = "~6.22.0"
+Unitful = "~1.22.0"
 UnitfulLatexify = "~1.6.4"
 """
 
@@ -523,7 +1182,22 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.11.2"
 manifest_format = "2.0"
-project_hash = "39e3739f693c2602c5468eb0c7a7f07595abd82e"
+project_hash = "b4bc440a1927aae2eb131322cbe6eabad9f44196"
+
+[[deps.ADTypes]]
+git-tree-sha1 = "72af59f5b8f09faee36b4ec48e014a79210f2f4f"
+uuid = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+version = "1.11.0"
+
+    [deps.ADTypes.extensions]
+    ADTypesChainRulesCoreExt = "ChainRulesCore"
+    ADTypesConstructionBaseExt = "ConstructionBase"
+    ADTypesEnzymeCoreExt = "EnzymeCore"
+
+    [deps.ADTypes.weakdeps]
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    ConstructionBase = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
+    EnzymeCore = "f151be2c-9106-41f4-ab19-57ee4f262869"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
@@ -560,6 +1234,16 @@ version = "0.1.42"
     Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
+[[deps.Adapt]]
+deps = ["LinearAlgebra", "Requires"]
+git-tree-sha1 = "50c3c56a52972d78e8be9fd135bfb91c9574c140"
+uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+version = "4.1.1"
+weakdeps = ["StaticArrays"]
+
+    [deps.Adapt.extensions]
+    AdaptStaticArraysExt = "StaticArrays"
+
 [[deps.AliasTables]]
 deps = ["PtrArrays", "Random"]
 git-tree-sha1 = "9876e1e164b144ca45e9e3198d0b689cadfed9ff"
@@ -570,6 +1254,38 @@ version = "1.1.3"
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
 version = "1.1.2"
 
+[[deps.ArrayInterface]]
+deps = ["Adapt", "LinearAlgebra"]
+git-tree-sha1 = "017fcb757f8e921fb44ee063a7aafe5f89b86dd1"
+uuid = "4fba245c-0d91-5ea0-9b3e-6abc04ee57a9"
+version = "7.18.0"
+
+    [deps.ArrayInterface.extensions]
+    ArrayInterfaceBandedMatricesExt = "BandedMatrices"
+    ArrayInterfaceBlockBandedMatricesExt = "BlockBandedMatrices"
+    ArrayInterfaceCUDAExt = "CUDA"
+    ArrayInterfaceCUDSSExt = "CUDSS"
+    ArrayInterfaceChainRulesCoreExt = "ChainRulesCore"
+    ArrayInterfaceChainRulesExt = "ChainRules"
+    ArrayInterfaceGPUArraysCoreExt = "GPUArraysCore"
+    ArrayInterfaceReverseDiffExt = "ReverseDiff"
+    ArrayInterfaceSparseArraysExt = "SparseArrays"
+    ArrayInterfaceStaticArraysCoreExt = "StaticArraysCore"
+    ArrayInterfaceTrackerExt = "Tracker"
+
+    [deps.ArrayInterface.weakdeps]
+    BandedMatrices = "aae01518-5342-5314-be14-df237901396f"
+    BlockBandedMatrices = "ffab5731-97b5-5995-9138-79e8c1846df0"
+    CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+    CUDSS = "45b445bb-4962-46a0-9369-b4df9d0f772e"
+    ChainRules = "082447d4-558c-5d27-93f4-14fc19e9eca2"
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
+    ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    StaticArraysCore = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
+    Tracker = "9f7883ad-71c0-57eb-9f7f-b5c9e6d3789c"
+
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 version = "1.11.0"
@@ -577,6 +1293,11 @@ version = "1.11.0"
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 version = "1.11.0"
+
+[[deps.Bijections]]
+git-tree-sha1 = "d8b0439d2be438a5f2cd68ec158fe08a7b2595b7"
+uuid = "e2ed5e7c-b2de-5872-ae92-c73ca462fb04"
+version = "0.1.9"
 
 [[deps.CategoricalArrays]]
 deps = ["DataAPI", "Future", "Missings", "Printf", "Requires", "Statistics", "Unicode"]
@@ -595,6 +1316,16 @@ version = "0.10.8"
     RecipesBase = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
     SentinelArrays = "91c51154-3ec4-41a3-a24f-3f23e20d615c"
     StructTypes = "856f2bd8-1eba-4b0a-8007-ebc267875bd4"
+
+[[deps.ChainRulesCore]]
+deps = ["Compat", "LinearAlgebra"]
+git-tree-sha1 = "1713c74e00545bfe14605d2a2be1712de8fbcb58"
+uuid = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+version = "1.25.1"
+weakdeps = ["SparseArrays"]
+
+    [deps.ChainRulesCore.extensions]
+    ChainRulesCoreSparseArraysExt = "SparseArrays"
 
 [[deps.CodeTracking]]
 deps = ["InteractiveUtils", "UUIDs"]
@@ -640,6 +1371,11 @@ git-tree-sha1 = "0eee5eb66b1cf62cd6ad1b460238e60e4b09400c"
 uuid = "38540f10-b2f7-11e9-35d8-d573e4eb0ff2"
 version = "0.2.4"
 
+[[deps.CommonWorldInvalidations]]
+git-tree-sha1 = "ae52d1c52048455e85a387fbee9be553ec2b68d0"
+uuid = "f70d9fcc-98c5-4d4a-abd7-e4cdeebd8ca8"
+version = "1.0.0"
+
 [[deps.Compat]]
 deps = ["TOML", "UUIDs"]
 git-tree-sha1 = "8ae8d32e09f0dcf42a36b90d4e17f5dd2e4c4215"
@@ -655,6 +1391,11 @@ deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
 version = "1.1.1+0"
 
+[[deps.CompositeTypes]]
+git-tree-sha1 = "bce26c3dab336582805503bed209faab1c279768"
+uuid = "b152e2b5-7a66-4b01-a709-34e65c35f657"
+version = "0.1.4"
+
 [[deps.CompositionsBase]]
 git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
 uuid = "a33af91c-f02d-484b-be07-31d278c5ca2b"
@@ -668,16 +1409,12 @@ weakdeps = ["InverseFunctions"]
 git-tree-sha1 = "76219f1ed5771adbb096743bff43fb5fdd4c1157"
 uuid = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
 version = "1.5.8"
+weakdeps = ["IntervalSets", "LinearAlgebra", "StaticArrays"]
 
     [deps.ConstructionBase.extensions]
     ConstructionBaseIntervalSetsExt = "IntervalSets"
     ConstructionBaseLinearAlgebraExt = "LinearAlgebra"
     ConstructionBaseStaticArraysExt = "StaticArrays"
-
-    [deps.ConstructionBase.weakdeps]
-    IntervalSets = "8197267c-284f-5f27-9208-e0e47529a953"
-    LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [[deps.Crayons]]
 git-tree-sha1 = "249fe38abf76d48563e2f4556bebd215aa317e15"
@@ -717,6 +1454,12 @@ git-tree-sha1 = "9e2f36d3c96a820c678f2f1f1782582fcf685bae"
 uuid = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 version = "1.9.1"
 
+[[deps.DiffRules]]
+deps = ["IrrationalConstants", "LogExpFunctions", "NaNMath", "Random", "SpecialFunctions"]
+git-tree-sha1 = "23163d55f885173722d1e4cf0f6110cdbaf7e272"
+uuid = "b552c78f-8df3-52c6-915a-8e097449b14b"
+version = "1.15.1"
+
 [[deps.Distributed]]
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
@@ -744,15 +1487,44 @@ git-tree-sha1 = "2fb1e02f2b635d0845df5d7c167fec4dd739b00d"
 uuid = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
 version = "0.9.3"
 
+[[deps.DomainSets]]
+deps = ["CompositeTypes", "IntervalSets", "LinearAlgebra", "Random", "StaticArrays"]
+git-tree-sha1 = "490392af2c7d63183bfa2c8aaa6ab981c5ba7561"
+uuid = "5b8099bc-c8ec-5219-889f-1d9e522a28bf"
+version = "0.7.14"
+
+    [deps.DomainSets.extensions]
+    DomainSetsMakieExt = "Makie"
+
+    [deps.DomainSets.weakdeps]
+    Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
 [[deps.Downloads]]
 deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.6.0"
 
+[[deps.DynamicPolynomials]]
+deps = ["Future", "LinearAlgebra", "MultivariatePolynomials", "MutableArithmetics", "Reexport", "Test"]
+git-tree-sha1 = "9a3ae38b460449cc9e7dd0cfb059c76028724627"
+uuid = "7c1d4256-1411-5781-91ec-d7bc3513ac07"
+version = "0.6.1"
+
 [[deps.EnumX]]
 git-tree-sha1 = "bdb1942cd4c45e3c678fd11569d5cccd80976237"
 uuid = "4e289a0a-7415-4d19-859d-a7e5c4648b56"
 version = "1.0.4"
+
+[[deps.ExprTools]]
+git-tree-sha1 = "27415f162e6028e81c72b82ef756bf321213b6ec"
+uuid = "e2ba6199-217a-4e67-a87a-7c52f15ade04"
+version = "0.1.10"
+
+[[deps.Expronicon]]
+deps = ["MLStyle", "Pkg", "TOML"]
+git-tree-sha1 = "fc3951d4d398b5515f91d7fe5d45fc31dccb3c9b"
+uuid = "6b7a57c9-7cc1-4fdf-b7f5-e857abae3636"
+version = "0.8.5"
 
 [[deps.EzXML]]
 deps = ["Printf", "XML2_jll"]
@@ -787,10 +1559,27 @@ git-tree-sha1 = "9c68794ef81b08086aeb32eeaf33531668d5f5fc"
 uuid = "1fa38f19-a742-5d3f-a2b9-30dd87b9d5f8"
 version = "1.3.7"
 
+[[deps.FunctionWrappers]]
+git-tree-sha1 = "d62485945ce5ae9c0c48f124a84998d755bae00e"
+uuid = "069b7b12-0de2-55c6-9aab-29f3d0a68a2e"
+version = "1.1.3"
+
+[[deps.FunctionWrappersWrappers]]
+deps = ["FunctionWrappers"]
+git-tree-sha1 = "b104d487b34566608f8b4e1c39fb0b10aa279ff8"
+uuid = "77dc65aa-8811-40c2-897b-53d922fa7daf"
+version = "0.1.3"
+
 [[deps.Future]]
 deps = ["Random"]
 uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
 version = "1.11.0"
+
+[[deps.GPUArraysCore]]
+deps = ["Adapt"]
+git-tree-sha1 = "83cf05ab16a73219e5f6bd1bdfa9848fa24ac627"
+uuid = "46192b85-c4d5-4398-a991-12ede77f4527"
+version = "0.2.0"
 
 [[deps.Handcalcs]]
 deps = ["AbstractTrees", "CodeTracking", "InteractiveUtils", "LaTeXStrings", "Latexify", "MacroTools", "PrecompileTools", "Revise", "TestHandcalcFunctions"]
@@ -833,6 +1622,11 @@ git-tree-sha1 = "b6d6bfdd7ce25b0f9b2f6b3dd56b2673a66c8770"
 uuid = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
 version = "0.2.5"
 
+[[deps.IfElse]]
+git-tree-sha1 = "debdd00ffef04665ccbb3e150747a77560e8fad1"
+uuid = "615f187c-cbe4-4ef1-ba3b-2fcf58d6d173"
+version = "0.1.1"
+
 [[deps.InlineStrings]]
 git-tree-sha1 = "6a9fde685a7ac1eb3495f8e812c5a7c3711c2d5e"
 uuid = "842dd82b-1e85-43dc-bf29-5d0ee9dffc48"
@@ -846,10 +1640,26 @@ version = "1.4.3"
     ArrowTypes = "31f734f8-188a-4ce0-8406-c8a06bd891cd"
     Parsers = "69de0a69-1ddd-5017-9359-2bf0b02dc9f0"
 
+[[deps.IntegerMathUtils]]
+git-tree-sha1 = "b8ffb903da9f7b8cf695a8bead8e01814aa24b30"
+uuid = "18e54dd8-cb9d-406c-a71d-865a43cbb235"
+version = "0.1.2"
+
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
 version = "1.11.0"
+
+[[deps.IntervalSets]]
+git-tree-sha1 = "dba9ddf07f77f60450fe5d2e2beb9854d9a49bd0"
+uuid = "8197267c-284f-5f27-9208-e0e47529a953"
+version = "0.7.10"
+weakdeps = ["Random", "RecipesBase", "Statistics"]
+
+    [deps.IntervalSets.extensions]
+    IntervalSetsRandomExt = "Random"
+    IntervalSetsRecipesBaseExt = "RecipesBase"
+    IntervalSetsStatisticsExt = "Statistics"
 
 [[deps.InverseFunctions]]
 git-tree-sha1 = "a779299d77cd080bf77b97535acecd73e1c5e5cb"
@@ -986,6 +1796,11 @@ git-tree-sha1 = "1833212fd6f580c20d4291da9c1b4e8a655b128e"
 uuid = "6c6e2e6c-3030-632d-7369-2d6c69616d65"
 version = "1.0.0"
 
+[[deps.MLStyle]]
+git-tree-sha1 = "bc38dff0548128765760c79eb7388a4b37fae2c8"
+uuid = "d8e11817-5142-5d16-987a-aa16d5891078"
+version = "0.4.17"
+
 [[deps.MacroTools]]
 git-tree-sha1 = "72aebe0b5051e5143a079a4685a46da330a40472"
 uuid = "1914dd2f-81c6-5fcd-8719-6d5c9610ff09"
@@ -1020,6 +1835,24 @@ deps = ["Distributions", "SpecialFunctions", "StatsBase"]
 git-tree-sha1 = "1e98f8f732e7035c4333135b75605b74f3462b9b"
 uuid = "f8716d33-7c4a-5097-896f-ce0ecbd3ef6b"
 version = "0.6.0"
+
+[[deps.MultivariatePolynomials]]
+deps = ["ChainRulesCore", "DataStructures", "LinearAlgebra", "MutableArithmetics"]
+git-tree-sha1 = "8d39779e29f80aa6c071e7ac17101c6e31f075d7"
+uuid = "102ac46a-7ee4-5c85-9060-abc95bfdeaa3"
+version = "0.5.7"
+
+[[deps.MutableArithmetics]]
+deps = ["LinearAlgebra", "SparseArrays", "Test"]
+git-tree-sha1 = "a2710df6b0931f987530f59427441b21245d8f5e"
+uuid = "d8a4904e-b15c-11e9-3269-09a3773c0cb0"
+version = "1.6.0"
+
+[[deps.NaNMath]]
+deps = ["OpenLibm_jll"]
+git-tree-sha1 = "fe891aea7ccd23897520db7f16931212454e277e"
+uuid = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
+version = "1.1.1"
 
 [[deps.NaturalSort]]
 git-tree-sha1 = "eda490d06b9f7c00752ee81cfa451efe55521e21"
@@ -1140,6 +1973,12 @@ git-tree-sha1 = "1101cd475833706e4d0e7b122218257178f48f34"
 uuid = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
 version = "2.4.0"
 
+[[deps.Primes]]
+deps = ["IntegerMathUtils"]
+git-tree-sha1 = "cb420f77dc474d23ee47ca8d14c90810cafe69e7"
+uuid = "27ebfcd6-29c5-5fa9-bf4b-fb8fc14df3ae"
+version = "0.5.6"
+
 [[deps.Printf]]
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
@@ -1171,6 +2010,40 @@ version = "1.11.0"
 deps = ["SHA"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 version = "1.11.0"
+
+[[deps.RecipesBase]]
+deps = ["PrecompileTools"]
+git-tree-sha1 = "5c3d09cc4f31f5fc6af001c250bf1278733100ff"
+uuid = "3cdcf5f2-1ef4-517c-9805-6587b60abb01"
+version = "1.3.4"
+
+[[deps.RecursiveArrayTools]]
+deps = ["Adapt", "ArrayInterface", "DocStringExtensions", "GPUArraysCore", "IteratorInterfaceExtensions", "LinearAlgebra", "RecipesBase", "StaticArraysCore", "Statistics", "SymbolicIndexingInterface", "Tables"]
+git-tree-sha1 = "32f824db4e5bab64e25a12b22483a30a6b813d08"
+uuid = "731186ca-8d62-57ce-b412-fbd966d074cd"
+version = "3.27.4"
+
+    [deps.RecursiveArrayTools.extensions]
+    RecursiveArrayToolsFastBroadcastExt = "FastBroadcast"
+    RecursiveArrayToolsForwardDiffExt = "ForwardDiff"
+    RecursiveArrayToolsMeasurementsExt = "Measurements"
+    RecursiveArrayToolsMonteCarloMeasurementsExt = "MonteCarloMeasurements"
+    RecursiveArrayToolsReverseDiffExt = ["ReverseDiff", "Zygote"]
+    RecursiveArrayToolsSparseArraysExt = ["SparseArrays"]
+    RecursiveArrayToolsStructArraysExt = "StructArrays"
+    RecursiveArrayToolsTrackerExt = "Tracker"
+    RecursiveArrayToolsZygoteExt = "Zygote"
+
+    [deps.RecursiveArrayTools.weakdeps]
+    FastBroadcast = "7034ab61-46d4-4ed7-9d0f-46aef9175898"
+    ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+    Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
+    MonteCarloMeasurements = "0987c9cc-fe09-11e8-30f0-b96dd679fdca"
+    ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
+    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+    StructArrays = "09ab397b-f2b6-538f-b94a-2f83cf4a842a"
+    Tracker = "9f7883ad-71c0-57eb-9f7f-b5c9e6d3789c"
+    Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [[deps.Reexport]]
 git-tree-sha1 = "45e428421666073eab6f2da5c9d310d99bb12f9b"
@@ -1221,9 +2094,57 @@ version = "2.2.6"
     SymPy = "24249f21-da20-56a4-8eb1-6a02cf4ae2e6"
     SymPyPythonCall = "bc8888f7-b21e-4b7c-a06a-5d9c9496438c"
 
+[[deps.RuntimeGeneratedFunctions]]
+deps = ["ExprTools", "SHA", "Serialization"]
+git-tree-sha1 = "04c968137612c4a5629fa531334bb81ad5680f00"
+uuid = "7e49a35a-f44a-4d26-94aa-eba1b4ca6b47"
+version = "0.5.13"
+
 [[deps.SHA]]
 uuid = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 version = "0.7.0"
+
+[[deps.SciMLBase]]
+deps = ["ADTypes", "Accessors", "ArrayInterface", "CommonSolve", "ConstructionBase", "Distributed", "DocStringExtensions", "EnumX", "Expronicon", "FunctionWrappersWrappers", "IteratorInterfaceExtensions", "LinearAlgebra", "Logging", "Markdown", "PrecompileTools", "Preferences", "Printf", "RecipesBase", "RecursiveArrayTools", "Reexport", "RuntimeGeneratedFunctions", "SciMLOperators", "SciMLStructures", "StaticArraysCore", "Statistics", "SymbolicIndexingInterface"]
+git-tree-sha1 = "3e5a9c5d6432b77a271646b4ada2573f239ac5c4"
+uuid = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+version = "2.70.0"
+
+    [deps.SciMLBase.extensions]
+    SciMLBaseChainRulesCoreExt = "ChainRulesCore"
+    SciMLBaseMakieExt = "Makie"
+    SciMLBasePartialFunctionsExt = "PartialFunctions"
+    SciMLBasePyCallExt = "PyCall"
+    SciMLBasePythonCallExt = "PythonCall"
+    SciMLBaseRCallExt = "RCall"
+    SciMLBaseZygoteExt = "Zygote"
+
+    [deps.SciMLBase.weakdeps]
+    ChainRules = "082447d4-558c-5d27-93f4-14fc19e9eca2"
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+    PartialFunctions = "570af359-4316-4cb7-8c74-252c00c2016b"
+    PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
+    PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
+    RCall = "6f49c342-dc21-5d91-9882-a32aef131414"
+    Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
+
+[[deps.SciMLOperators]]
+deps = ["Accessors", "ArrayInterface", "DocStringExtensions", "LinearAlgebra", "MacroTools"]
+git-tree-sha1 = "6149620767866d4b0f0f7028639b6e661b6a1e44"
+uuid = "c0aeaf25-5076-4817-a8d5-81caf7dfa961"
+version = "0.3.12"
+weakdeps = ["SparseArrays", "StaticArraysCore"]
+
+    [deps.SciMLOperators.extensions]
+    SciMLOperatorsSparseArraysExt = "SparseArrays"
+    SciMLOperatorsStaticArraysCoreExt = "StaticArraysCore"
+
+[[deps.SciMLStructures]]
+deps = ["ArrayInterface"]
+git-tree-sha1 = "0444a37a25fab98adbd90baa806ee492a3af133a"
+uuid = "53ae85a6-f571-4167-b2af-e1d143709226"
+version = "1.6.1"
 
 [[deps.ScopedValues]]
 deps = ["HashArrayMappedTries", "Logging"]
@@ -1247,6 +2168,12 @@ version = "1.4.8"
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 version = "1.11.0"
 
+[[deps.Setfield]]
+deps = ["ConstructionBase", "Future", "MacroTools", "StaticArraysCore"]
+git-tree-sha1 = "e2cc6d8c88613c05e1defb55170bf5ff211fbeac"
+uuid = "efcf1570-3423-57d1-acb7-fd33fddbac46"
+version = "1.1.1"
+
 [[deps.Sockets]]
 uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
 version = "1.11.0"
@@ -1267,12 +2194,26 @@ deps = ["IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_j
 git-tree-sha1 = "64cca0c26b4f31ba18f13f6c12af7c85f478cfde"
 uuid = "276daf66-3868-5448-9aa4-cd146d93841b"
 version = "2.5.0"
+weakdeps = ["ChainRulesCore"]
 
     [deps.SpecialFunctions.extensions]
     SpecialFunctionsChainRulesCoreExt = "ChainRulesCore"
 
-    [deps.SpecialFunctions.weakdeps]
-    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+[[deps.StaticArrays]]
+deps = ["LinearAlgebra", "PrecompileTools", "Random", "StaticArraysCore"]
+git-tree-sha1 = "47091a0340a675c738b1304b58161f3b0839d454"
+uuid = "90137ffa-7385-5640-81b9-e52037218182"
+version = "1.9.10"
+weakdeps = ["ChainRulesCore", "Statistics"]
+
+    [deps.StaticArrays.extensions]
+    StaticArraysChainRulesCoreExt = "ChainRulesCore"
+    StaticArraysStatisticsExt = "Statistics"
+
+[[deps.StaticArraysCore]]
+git-tree-sha1 = "192954ef1208c7019899fbf8049e717f92959682"
+uuid = "1e83bf80-4336-4d27-bf5d-d5a4f845583c"
+version = "1.4.3"
 
 [[deps.Statistics]]
 deps = ["LinearAlgebra"]
@@ -1301,14 +2242,11 @@ deps = ["HypergeometricFunctions", "IrrationalConstants", "LogExpFunctions", "Re
 git-tree-sha1 = "b423576adc27097764a90e163157bcfc9acf0f46"
 uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
 version = "1.3.2"
+weakdeps = ["ChainRulesCore", "InverseFunctions"]
 
     [deps.StatsFuns.extensions]
     StatsFunsChainRulesCoreExt = "ChainRulesCore"
     StatsFunsInverseFunctionsExt = "InverseFunctions"
-
-    [deps.StatsFuns.weakdeps]
-    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
-    InverseFunctions = "3587e190-3f89-42d0-90ee-14403ec27112"
 
 [[deps.StringManipulation]]
 deps = ["PrecompileTools"]
@@ -1334,6 +2272,54 @@ deps = ["CategoricalArrays", "DataFrames", "EnumX", "HypothesisTests", "Multiple
 git-tree-sha1 = "04b2e917956ae2083a78033ce6adc0cd843439b6"
 uuid = "6ce4ecf0-73a7-4ce3-9fb4-80ebfe887b60"
 version = "3.3.0"
+
+[[deps.SymbolicIndexingInterface]]
+deps = ["Accessors", "ArrayInterface", "RuntimeGeneratedFunctions", "StaticArraysCore"]
+git-tree-sha1 = "fd2d4f0499f6bb4a0d9f5030f5c7d61eed385e03"
+uuid = "2efcf032-c050-4f8e-a9bb-153293bab1f5"
+version = "0.3.37"
+
+[[deps.SymbolicLimits]]
+deps = ["SymbolicUtils"]
+git-tree-sha1 = "fabf4650afe966a2ba646cabd924c3fd43577fc3"
+uuid = "19f23fe9-fdab-4a78-91af-e7b7767979c3"
+version = "0.2.2"
+
+[[deps.SymbolicUtils]]
+deps = ["AbstractTrees", "ArrayInterface", "Bijections", "ChainRulesCore", "Combinatorics", "ConstructionBase", "DataStructures", "DocStringExtensions", "DynamicPolynomials", "IfElse", "LinearAlgebra", "MultivariatePolynomials", "NaNMath", "Setfield", "SparseArrays", "SpecialFunctions", "StaticArrays", "SymbolicIndexingInterface", "TermInterface", "TimerOutputs", "Unityper", "WeakValueDicts"]
+git-tree-sha1 = "bca944105ac43be732e3bdc38e39a4ce17391137"
+uuid = "d1185830-fcd6-423d-90d6-eec64667417b"
+version = "3.8.1"
+
+    [deps.SymbolicUtils.extensions]
+    SymbolicUtilsLabelledArraysExt = "LabelledArrays"
+    SymbolicUtilsReverseDiffExt = "ReverseDiff"
+
+    [deps.SymbolicUtils.weakdeps]
+    LabelledArrays = "2ee39098-c373-598a-b85f-a56591580800"
+    ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
+
+[[deps.Symbolics]]
+deps = ["ADTypes", "ArrayInterface", "Bijections", "CommonWorldInvalidations", "ConstructionBase", "DataStructures", "DiffRules", "Distributions", "DocStringExtensions", "DomainSets", "DynamicPolynomials", "IfElse", "LaTeXStrings", "Latexify", "Libdl", "LinearAlgebra", "LogExpFunctions", "MacroTools", "Markdown", "NaNMath", "PrecompileTools", "Primes", "RecipesBase", "Reexport", "RuntimeGeneratedFunctions", "SciMLBase", "Setfield", "SparseArrays", "SpecialFunctions", "StaticArraysCore", "SymbolicIndexingInterface", "SymbolicLimits", "SymbolicUtils", "TermInterface"]
+git-tree-sha1 = "ce9c95fc859007747a4faf10166201e0b10d4313"
+uuid = "0c5d862f-8b57-4792-8d23-62f2024744c7"
+version = "6.22.0"
+
+    [deps.Symbolics.extensions]
+    SymbolicsForwardDiffExt = "ForwardDiff"
+    SymbolicsGroebnerExt = "Groebner"
+    SymbolicsLuxExt = "Lux"
+    SymbolicsNemoExt = "Nemo"
+    SymbolicsPreallocationToolsExt = ["PreallocationTools", "ForwardDiff"]
+    SymbolicsSymPyExt = "SymPy"
+
+    [deps.Symbolics.weakdeps]
+    ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+    Groebner = "0b43b601-686d-58a3-8a1c-6623616c7cd4"
+    Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
+    Nemo = "2edaba10-b0f1-5616-af89-8c11ac63239a"
+    PreallocationTools = "d236fae5-4411-538c-8e31-a6e3d9e00b46"
+    SymPy = "24249f21-da20-56a4-8eb1-6a02cf4ae2e6"
 
 [[deps.TOML]]
 deps = ["Dates"]
@@ -1363,6 +2349,11 @@ git-tree-sha1 = "1feb45f88d133a655e001435632f019a9a1bcdb6"
 uuid = "62fd8b95-f654-4bbd-a8a5-9c27f68ccd50"
 version = "0.1.1"
 
+[[deps.TermInterface]]
+git-tree-sha1 = "d673e0aca9e46a2f63720201f55cc7b3e7169b16"
+uuid = "8ea1fca8-c5ef-4a55-8b96-4e9afe9c9a3c"
+version = "2.0.0"
+
 [[deps.Test]]
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
@@ -1372,6 +2363,12 @@ version = "1.11.0"
 git-tree-sha1 = "54dac4d0a0cd2fc20ceb72e0635ee3c74b24b840"
 uuid = "6ba57fb7-81df-4b24-8e8e-a3885b6fcae7"
 version = "0.2.4"
+
+[[deps.TimerOutputs]]
+deps = ["ExprTools", "Printf"]
+git-tree-sha1 = "d7298ebdfa1654583468a487e8e83fae9d72dac3"
+uuid = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
+version = "0.5.26"
 
 [[deps.Tricks]]
 git-tree-sha1 = "6cae795a5a9313bbb4f60683f7263318fc7d1505"
@@ -1413,6 +2410,17 @@ deps = ["LaTeXStrings", "Latexify", "Unitful"]
 git-tree-sha1 = "975c354fcd5f7e1ddcc1f1a23e6e091d99e99bc8"
 uuid = "45397f5d-5981-4c77-b2b3-fc36d6e9b728"
 version = "1.6.4"
+
+[[deps.Unityper]]
+deps = ["ConstructionBase"]
+git-tree-sha1 = "25008b734a03736c41e2a7dc314ecb95bd6bbdb0"
+uuid = "a7c27f48-0311-42f6-a7f8-2c11e75eb415"
+version = "0.1.6"
+
+[[deps.WeakValueDicts]]
+git-tree-sha1 = "98528c2610a5479f091d470967a25becfd83edd0"
+uuid = "897b6980-f191-5a31-bcb0-bf3c4585e0c1"
+version = "0.1.0"
 
 [[deps.WriteDocx]]
 deps = ["EnumX", "EzXML", "MacroTools", "OrderedCollections", "ZipFile"]
@@ -1457,23 +2465,69 @@ version = "17.4.0+2"
 # ╠═b2da04e0-ff6f-11ef-3db4-8165a7ebfc2e
 # ╠═80f18465-cc64-4335-bc7b-55df0af9b6c2
 # ╠═027cc2b1-c160-46f7-857b-c16ce95ed18c
-# ╠═193e4d46-2155-4c9f-beb0-3b4edd10cc80
-# ╠═6d0fd8f1-d97d-4555-980a-7deec7aefbe4
-# ╟─40bc31bb-19f0-41f0-845d-04ec41f3bb32
-# ╠═112e77de-a9c4-467e-9278-c16b788127b7
-# ╠═e720a006-63cc-4467-aee7-eb4ac1a72d4b
-# ╠═a7d143b7-c216-478e-ae83-e4ef6125ab08
-# ╠═797936ac-8696-4f40-9b39-1d380d698edd
-# ╠═3d194c62-1450-47a5-89e6-bc3ba42684c9
-# ╠═7c54ec65-8575-4a42-9188-d83966d94523
-# ╠═78784a0f-343f-468d-a319-67dd0739acf7
-# ╠═23bb5739-092a-408e-95bd-14cffa8e3cda
-# ╠═8b3eeb4a-8f59-4ef8-ae83-08fc36c6331f
+# ╟─ae310438-a7cb-4de3-8778-fa189a100a1b
+# ╟─156eb9b3-b31c-4795-90d5-c00795489e87
+# ╟─c433d46d-71a6-4e4e-b3e8-8bf3ed17630d
+# ╟─3e90eab6-78fb-4b81-b9e7-0dbe633edb57
+# ╟─b93b00c9-4369-4e43-b38b-2c22aa96e352
+# ╟─9cc812a2-0765-48ff-91df-e1aebace845e
+# ╟─8d089fd6-82e9-4e23-ae4c-8eeb832734b1
+# ╟─4f22d62b-baef-4732-8dd7-5648bad8f5e5
+# ╟─b847e1b1-008e-4caa-b8ae-7cb37b5e73a3
+# ╟─f547952e-feed-45b1-ad69-25d5b5d289f4
+# ╟─fc68a3d0-656d-4efc-9239-11636d2f6500
+# ╟─49c6b23d-58f2-49f2-a6f4-ba08a6ad4330
+# ╟─a4cbd8fd-8c57-4bc0-a6d7-ba68714716dc
+# ╟─c6c9ea3e-1088-4fd7-9225-2ccb6988a45b
+# ╟─c83108fe-c227-46db-bb15-a33d81ba2407
+# ╟─8ef04446-1dbd-480d-b49a-a79ba9e8f015
+# ╟─df98734f-adda-44e1-b9d9-7656c1a0dc62
+# ╟─ed5643bf-9147-4af3-828e-8b976af35624
+# ╟─78784a0f-343f-468d-a319-67dd0739acf7
+# ╟─6c4aec09-d71f-4328-bb32-fc5408809086
+# ╟─fd5d62c7-491e-4a3e-ad50-f31e5e1f81fd
+# ╟─48f8a053-29bb-422f-b203-c51b6ba1eab9
+# ╟─5f3ef1ab-3280-41fb-a6b4-53212a664630
+# ╟─66d2c12a-2885-4c03-8da5-3d7ad6dee360
+# ╟─1c9c182a-0627-4d75-802f-2677cc26fbdb
+# ╟─9ee27fcb-f472-45da-95f1-7defe75b6b50
+# ╟─5df76aa2-aacc-4ffa-8a72-4bba26e690a4
+# ╟─ccb73a9f-1bc1-4293-ac4f-161106411c94
+# ╟─87c0ceda-75d3-492b-a071-d2813f892c13
+# ╟─28d3fe04-6513-4647-8eff-a7b6bb3833bf
+# ╟─5f702941-0371-4148-827b-8922999a9ee3
+# ╟─1f16805b-edf3-47f1-8bdb-b10fd6344131
+# ╟─732337cf-141d-4694-a839-b6dbf33149ba
+# ╟─47f6d488-5c99-4635-b3de-0db1c0bd25f8
+# ╟─8e38639f-5913-49d7-9f86-7b2e9abd49b8
+# ╟─96414313-cc3d-4e79-b067-534b9ef440f6
+# ╟─f8e3eb62-ac3a-4645-b341-a9e63c3d8abd
+# ╟─0ff27e34-bc15-49ef-a5fe-a71fffd4acb2
+# ╟─baecef75-a95f-479b-a45e-fae2a7c7df09
+# ╟─9345cc82-e951-4eea-91bc-3cf6bd503327
+# ╟─ff7d932b-44c4-48d0-a06c-8f50ac0718fe
+# ╟─88cd1122-e048-4606-a1aa-01abf53e3166
+# ╟─a9f6ddf2-6114-4ede-8696-35a39adda062
+# ╟─c2a51979-4a0c-45dd-a9d7-2af90e80f012
+# ╟─9285bc03-1746-4c5f-8411-d859273fbc06
+# ╟─20a657f5-2cdc-46b6-8919-389f7ee812b0
+# ╟─30d2fd1a-8025-4e4e-aee4-d712252a2cec
+# ╟─ba66fcf3-34a0-4d6e-9421-852ac6eb8a79
 # ╟─00d22203-2ccd-408a-b791-c5a12abb53bf
 # ╟─bc23969d-aaf6-4f06-ad48-0f628c86cb6f
+# ╠═e720a006-63cc-4467-aee7-eb4ac1a72d4b
+# ╠═a7d143b7-c216-478e-ae83-e4ef6125ab08
+# ╠═3d194c62-1450-47a5-89e6-bc3ba42684c9
+# ╠═797936ac-8696-4f40-9b39-1d380d698edd
+# ╠═fdda1c3c-3721-4f9e-b032-5ecd4baf9928
+# ╠═38110d01-a1cf-4142-bad6-b1f54c2707d4
 # ╟─b6bb7fdd-aecd-41a0-934a-2981155355d5
 # ╟─3d5a0e0f-e596-4112-8b29-29a965bf7e79
 # ╠═9d35446e-b838-493d-a70c-b0d526050b40
+# ╟─1934ea7f-da27-457d-90d9-539643a4f410
+# ╟─7ad9475c-c627-46c6-9a3c-dee1948813df
+# ╠═4ee6a7f9-7b46-4315-91d9-045ae6cb6ae6
+# ╠═94a1af2f-8d24-45b0-8698-953d274b7dee
 # ╟─6221e2b7-bd96-4319-b484-71841d655e40
 # ╟─b2dc96b9-6bcd-444a-9529-b238264a45d1
 # ╠═23bef496-953f-4c5f-89c8-1ac5cdea05be
@@ -1481,9 +2535,11 @@ version = "17.4.0+2"
 # ╟─acaefb97-3439-4a62-86ed-daf76988fa04
 # ╠═6c215c39-ecb1-4ece-af5b-6614311ae7e1
 # ╟─fb20596d-ac09-4ff5-bc0c-2833e61ccc37
+# ╟─7ad6e59b-cb77-4c90-8f9c-c43f227095f5
+# ╠═29ac282c-0429-47a0-9da2-b7a0449b4e4a
+# ╠═f1d07d6d-a126-4f41-a246-758e0861aed3
 # ╠═a9a8cd53-ed30-4d21-af3c-dfb6e2f46440
 # ╟─031d5747-990b-4ca6-b817-2154b27dce5b
 # ╠═b8f2e603-d164-4d40-9ba5-621c8f2c9308
-# ╠═dfba23f5-64e0-4905-8646-8b6c51aecc34
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
